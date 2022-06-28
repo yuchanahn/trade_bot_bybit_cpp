@@ -6,6 +6,9 @@
 #include <ranges>
 #include "Encryption.hpp"
 
+#define TESTNET false
+
+
 template <std::ranges::range R>
 auto to_vector(R&& r) {
     auto r_common = r | std::views::common;
@@ -79,12 +82,110 @@ namespace api
         }
     };
 
-    std::string api_url = "https://api.bybit.com";
-    std::string api_key = "bxfuVX3jk4R834ggVX";
-    std::string secret_key = "QSV5P8FCmqEeiHjXQA1HB7vKZwu6pbIIYHSg";
+
+    class place_active_order_lim
+    {
+    public:
+        string   api_key;
+        string   position_idx;
+        double   qty;
+        double   price;
+        bool     reduce_only;
+        string   side;
+        string   timestamp;
+        string   sign;
+
+        std::string to_json() {
+            return std::format(
+                "{{\"api_key\":\"{}\",\"close_on_trigger\":false,\"side\":\"{}\",\"symbol\":\"BTCUSDT\",\"order_type\":\"Limit\",\"position_idx\":{},\"price\":{},\"qty\":{},\"reduce_only\":{},\"time_in_force\":\"GoodTillCancel\",\"timestamp\":{},\"sign\":\"{}\"}}",
+                api_key,
+                side,
+                position_idx.c_str(),
+                std::format("{}", price),
+                (floor((qty) * 1000) / 1000),
+                (reduce_only ? "true" : "false"),
+                timestamp,
+                sign);
+        }
+
+        Params CreateParamStr()
+        {
+            return Params{
+                {"api_key", api_key},
+                {"close_on_trigger", "false"},
+                {"order_type", "Limit"},
+                {"position_idx", position_idx},
+                {"price", std::format("{}", price)},
+                {"qty", std::format("{}", (floor((qty) * 1000) / 1000))},
+                {"reduce_only", string(reduce_only ? "true" : "false")},
+                {"side", side},
+                {"symbol", "BTCUSDT"},
+                {"time_in_force", "GoodTillCancel"},
+                {"timestamp", timestamp},
+            };
+        }
+    };
+
+    class cancel_active_order {
+    public:
+        string   api_key;
+        string   order_id;
+        string   timestamp;
+        string   sign;
+
+        std::string to_json() {
+            return std::format(
+                "{{\"api_key\":\"{}\",\"symbol\":\"BTCUSDT\",\"order_id\":\"{}\",\"timestamp\":{},\"sign\":\"{}\"}}",
+                api_key,
+                order_id,
+                timestamp,
+                sign);
+        }
+
+        Params CreateParamStr()
+        {
+            return Params{
+                {"api_key", api_key},
+                {"order_id", order_id},
+                {"symbol", "BTCUSDT"},
+                {"timestamp", timestamp},
+            };
+        }
+    };
+
+
+    class cancel_all_active_order {
+    public:
+        string   api_key;
+        string   timestamp;
+        string   sign;
+
+        std::string to_json() {
+            return std::format(
+                "{{\"api_key\":\"{}\",\"symbol\":\"BTCUSDT\",\"timestamp\":{},\"sign\":\"{}\"}}",
+                api_key,
+                timestamp,
+                sign);
+        }
+
+        Params CreateParamStr()
+        {
+            return Params{
+                {"api_key", api_key},
+                {"symbol", "BTCUSDT"},
+                {"timestamp", timestamp},
+            };
+        }
+    };
+
+    std::string api_key = "";
+    std::string secret_key = "";
+
 
     // HTTPS
-    httplib::Client cli("https://api.bybit.com");
+    httplib::Client cli(TESTNET ? "https://api-testnet.bybit.com" : "https://api.bybit.com");
+
+
 
     long double get_time()
     {
@@ -134,6 +235,30 @@ namespace api
         return r;
     }
 
+    std::vector<std::string> get_order_list()
+    {
+        auto t = time();
+        std::string url = "/private/linear/order/search?";
+        auto pram = Params
+        {
+        { "api_key", api_key },
+        { "symbol","BTCUSDT"},
+        { "timestamp", t}
+        };
+        pram["sign"] = GetSignature(pram, secret_key);
+        url.append(GetParams(pram));
+        auto res = cli.Get(url.c_str());
+
+        std::vector<std::string> list;
+        auto j = yc_json::parse(res->body)["result"];
+
+        for (int i = 0; i < j.count(); i++) 
+            list.push_back(j[i].to_string());
+        
+        return list;
+    }
+
+
     position_t close_position(string side, double qty)
     {
         api::place_active_order order;
@@ -181,6 +306,87 @@ namespace api
         return m_p;
     }
 
+
+    string open_position_lim(string side, double qty, double price)
+    {
+        api::place_active_order_lim order;
+
+        order.api_key = api_key;
+        order.position_idx = (side == "Buy") ? "1" : "2";
+        order.qty = qty;
+        order.price = price;
+        order.reduce_only = false;
+        order.side = side;
+        order.timestamp = time();
+        order.sign = GetSignature(order.CreateParamStr(), secret_key);
+
+        auto r = cli.Post("/private/linear/order/create", order.to_json(), "application/json");
+        
+        return yc_json::parse(r->body.c_str())["result"]["order_id"].to_string();
+    }
+
+    string close_position_lim(string side, double qty, double price)
+    {
+        api::place_active_order_lim order;
+
+        order.api_key = api_key;
+        order.position_idx = (side == "Buy") ? "1" : "2";
+        order.qty = qty;
+        order.price = price;
+        order.reduce_only = true;
+        order.side = (side == "Buy") ? "Sell" : "Buy";
+        order.timestamp = time();
+        order.sign = GetSignature(order.CreateParamStr(), secret_key);
+
+        auto r = cli.Post("/private/linear/order/create", order.to_json(), "application/json");
+
+        return yc_json::parse(r->body.c_str())["result"]["order_id"].to_string();
+    }
+
+    string cancel_order(string order_id)
+    {
+        api::cancel_active_order order;
+
+        order.api_key = api_key;
+        order.order_id = order_id;
+        order.timestamp = time();
+        order.sign = GetSignature(order.CreateParamStr(), secret_key);
+
+        auto r = cli.Post("/private/linear/order/cancel", order.to_json(), "application/json");
+
+        return yc_json::parse(r->body.c_str()).to_string();
+    }
+
+    string cancel_all_order()
+    {
+        api::cancel_all_active_order order;
+
+        order.api_key = api_key;
+        order.timestamp = time();
+        order.sign = GetSignature(order.CreateParamStr(), secret_key);
+
+        auto r = cli.Post("/private/linear/order/cancel-all", order.to_json(), "application/json");
+
+        return yc_json::parse(r->body.c_str()).to_string();
+    }
+
+
+    string get_equity() {
+        std::string url = "/v2/private/wallet/balance?";
+
+        auto t = time();
+        auto pram = Params
+        {
+        { "api_key", api_key },
+        { "symbol","BTCUSDT"},
+        { "timestamp", t}
+        };
+        pram["sign"] = GetSignature(pram, secret_key);
+        url.append(GetParams(pram));
+        auto res = cli.Get(url.c_str());
+
+        return yc_json::parse(res->body.c_str())["result"]["USDT"]["equity"].to_string();
+    }
     string get_blance() {
         std::string url = "/v2/private/wallet/balance?";
 

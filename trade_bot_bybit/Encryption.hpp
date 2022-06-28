@@ -46,3 +46,7 @@ std::string GetSignature(Params param, std::string secret) {
     }
     return HmacEncode(secret.c_str(), input.substr(0, input.length() - 1).c_str());
 }
+
+std::string GetSignature(std::string input, std::string secret) {
+    return HmacEncode(secret.c_str(), input.c_str());
+}
